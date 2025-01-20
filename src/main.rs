@@ -1,4 +1,5 @@
 use anyhow::bail;
+use bollard::{container::ListContainersOptions, Docker};
 use clap::Parser;
 use tracing::{debug, error, info, warn};
 
@@ -96,24 +97,91 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    let mut slave_container_manager = ContainerManager::new(args.slave_image_hash, 5);
+    let mut ib_instance_count = ContainerManager::new(args.ib_image_hash, 1);
+
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
                 info!("user pressed ctrl+c");
                 break
             }
-
             slave_message = rx.recv() => {
                 info!(message=?slave_message, "slave message");
             }
 
             _ = check_slaves_signal.tick() => {
                 info!("check slaves signal ticked");
+                // check how many instances of rust program we have
+                if let Err(err) = check_instances(&docker, &mut slave_container_manager).await {
+                    // handle error
+                }
+                if let Err(err) = check_instances(&docker, &mut ib_instance_count).await {
+                    // handle error
+                }
             }
         }
     }
 
     Ok(())
+}
+
+async fn check_instances(
+    docker: &Docker,
+    container_manager: &ContainerManager,
+) -> anyhow::Result<()> {
+    let containers = match docker.list_containers::<String>(None).await {
+        Ok(containers) => containers,
+        Err(err) => bail!("failed to get containers, {}", err),
+    };
+
+    let image_hash = container_manager.get_image_hash();
+
+    for container in containers {
+        println!("{:?}", container.image_id);
+        match container.image_id {
+            Some(v) => {}
+            None => {
+                warn!("failed to get image_id");
+            }
+        }
+
+        // Check if the image_id matches the image_hash and how many running instances we have
+    }
+
+    Ok(())
+}
+pub struct ContainerManager {
+    target_count: u16,
+    current_count: u16,
+    image_hash: String,
+}
+
+impl ContainerManager {
+    pub fn new(image_hash: String, target: u16) -> Self {
+        Self {
+            image_hash,
+            target_count: target,
+            current_count: 0,
+        }
+    }
+
+    pub fn get_image_hash(&self) -> &str {
+        self.image_hash.as_str()
+    }
+
+    pub fn get_target(&self) -> u16 {
+        self.target_count
+    }
+
+    pub fn get_current(&self) -> u16 {
+        self.current_count
+    }
+
+    pub fn set_current(&mut self, curr: u16) -> u16 {
+        self.current_count = curr;
+        self.current_count
+    }
 }
 
 fn image_extract_hash_from_id(id: &str) -> Option<&str> {
